@@ -60,11 +60,29 @@ class UniquePerAccountStripeObject(AccountRelatedStripeObjectMixin):
         unique_together = ("stripe_id", "stripe_account")
 
 
-class StripeAccountFromCustomerMixin(object):
+class StripeAccountFromCustomerMixin(models.Model):
+    """
+    Where this model type is used, the attached Customer instance should be checked for association
+    with an account. If there is no Customer associated, or if the Customer is not attached
+    to an account, then we check our own "hardcoded" account.
+    """
+    class Meta:
+        abstract = True
+
+    # The "hardcoded" account is used if this instance has no Customer or the Customer has
+    # no attached account.
+    stripe_account_hc = models.ForeignKey(
+        "pinax_stripe.Account",
+        on_delete=models.CASCADE,
+        null=True,
+        default=None,
+        blank=True,
+    )
+
     @property
     def stripe_account(self):
         customer = getattr(self, "customer", None)
-        return customer.stripe_account if customer else None
+        return customer.stripe_account if customer and customer.stripe_account else self.stripe_account_hc
 
     @property
     def stripe_account_stripe_id(self):

@@ -63,7 +63,9 @@ def sync_card(customer, source):
         exp_year=source["exp_year"],
         funding=source["funding"] or "",
         last4=source["last4"] or "",
-        fingerprint=source["fingerprint"] or ""
+        # Fingerprint is not present in some cases (e.g. when customer was created
+        # using a Connect accounts PK)
+        fingerprint=source.get("fingerprint") or ""
     )
     card, created = models.Card.objects.get_or_create(
         stripe_id=source["id"],

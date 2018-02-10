@@ -44,10 +44,10 @@ def capture(charge, amount=None, idempotency_key=None):
         idempotency_key=idempotency_key,
         expand=["balance_transaction"],
     )
-    sync_charge_from_stripe_data(stripe_charge)
+    sync_charge_from_stripe_data(stripe_charge, stripe_account=charge.stripe_account_stripe_id)
 
 
-def _validate_create_params(customer, source, amount, application_fee, destination_account, destination_amount, on_behalf_of):
+def _validate_create_params(customer, source, amount, application_fee, direct_connect, destination_account, destination_amount, on_behalf_of):
     if not customer and not source:
         raise ValueError("Must provide `customer` or `source`.")
     if not isinstance(amount, decimal.Decimal):
@@ -58,9 +58,21 @@ def _validate_create_params(customer, source, amount, application_fee, destinati
         raise ValueError(
             "You must supply a decimal value for `application_fee`."
         )
-    if application_fee and not destination_account:
+    if destination_account and direct_connect:
         raise ValueError(
-            "You can only specify `application_fee` with `destination_account`"
+            "You can only supply a destination account OR a direct account, but not both."
+        )
+    if direct_connect and application_fee is None:
+        raise ValueError(
+            "An application fee must be provided when using direct Connect payment. 0 is ok"
+        )
+    if direct_connect and destination_amount:
+        raise ValueError(
+            "Destination amount param is for destination mode Connect, not for direct payment mode."
+        )
+    if application_fee and not destination_account and not direct_connect:
+        raise ValueError(
+            "You can only specify `application_fee` with `destination_account` or `direct_connect`"
         )
     if application_fee and destination_account and destination_amount:
         raise ValueError(
@@ -74,8 +86,8 @@ def _validate_create_params(customer, source, amount, application_fee, destinati
 def create(
     amount, customer=None, source=None, currency="usd", description=None,
     send_receipt=settings.PINAX_STRIPE_SEND_EMAIL_RECEIPTS, capture=True,
-    email=None, destination_account=None, destination_amount=None,
-    application_fee=None, on_behalf_of=None, idempotency_key=None,
+    email=None, direct_connect=None, destination_account=None, destination_amount=None,
+    application_fee=None, on_behalf_of=None, idempotency_key=None, metadata=None
 ):
     """
     Create a charge for the given customer or source.
@@ -93,11 +105,14 @@ def create(
         description: a description of the charge
         send_receipt: send a receipt upon successful charge
         capture: immediately capture the charge instead of doing a pre-authorization
-        destination_account: stripe_id of a connected account
+        direct_connect: stripe_id of a connected account, if "direct payment" style Connect is desired
+        destination_account: stripe_id of a connected account, if "destination charge payment" style Connect is desired
         destination_amount: amount to transfer to the `destination_account` without creating an application fee
-        application_fee: used with `destination_account` to add a fee destined for the platform account
+        application_fee: used with Connect to add a fee destined for the platform account
         on_behalf_of: Stripe account ID that these funds are intended for. Automatically set if you use the destination parameter.
         idempotency_key: Any string that allows retries to be performed safely.
+        metadata: a dict of extended attributes to be attached to the record on the Stripe side for enhanced
+                  charge querying and reporting features. dict values and keys can be numbers or strings
 
     Returns:
         a pinax.stripe.models.Charge object
@@ -105,16 +120,17 @@ def create(
     # Handle customer as stripe_id for backward compatibility.
     if customer and not isinstance(customer, models.Customer):
         customer, _ = models.Customer.objects.get_or_create(stripe_id=customer)
-    _validate_create_params(customer, source, amount, application_fee, destination_account, destination_amount, on_behalf_of)
+    _validate_create_params(customer, source, amount, application_fee, direct_connect, destination_account, destination_amount, on_behalf_of)
     kwargs = dict(
         amount=utils.convert_amount_for_api(amount, currency),  # find the final amount
         currency=currency,
         source=source,
-        customer=customer.stripe_id,
-        stripe_account=customer.stripe_account_stripe_id,
+        customer=getattr(customer, 'stripe_id', None),
+        stripe_account=getattr(customer, 'stripe_account_stripe_id', None),
         description=description,
         capture=capture,
         idempotency_key=idempotency_key,
+        metadata=metadata,
     )
     if destination_account:
         kwargs["destination"] = {"account": destination_account}
@@ -123,16 +139,23 @@ def create(
                 destination_amount,
                 currency
             )
-        if application_fee:
-            kwargs["application_fee"] = utils.convert_amount_for_api(
-                application_fee, currency
-            )
-    elif on_behalf_of:
+
+    if direct_connect:
+        # Overrides the default of using the account id attached to the customer for this charge
+        kwargs["stripe_account"] = direct_connect
+
+    if application_fee:
+        kwargs["application_fee"] = utils.convert_amount_for_api(
+            application_fee, currency
+        )
+
+    if on_behalf_of:
         kwargs["on_behalf_of"] = on_behalf_of
+
     stripe_charge = stripe.Charge.create(
         **kwargs
     )
-    charge = sync_charge_from_stripe_data(stripe_charge)
+    charge = sync_charge_from_stripe_data(stripe_charge, stripe_account=destination_account or direct_connect)
     if send_receipt:
         hooks.hookset.send_receipt(charge, email)
     return charge
@@ -161,22 +184,27 @@ def sync_charges_for_customer(customer):
 def sync_charge(stripe_id, stripe_account=None):
     """Sync a charge given a Stripe charge ID."""
     return sync_charge_from_stripe_data(
-        retrieve(stripe_id, stripe_account=stripe_account)
+        retrieve(stripe_id, stripe_account=stripe_account), stripe_account=stripe_account
     )
 
 
-def sync_charge_from_stripe_data(data):
+def sync_charge_from_stripe_data(data, stripe_account=None):
     """
     Create or update the charge represented by the data from a Stripe API query.
 
     Args:
         data: the data representing a charge object in the Stripe API
+        stripe_account: if this charge was retrieved on behalf of a connect account, pass it in here.
+                        Note: for direct charge through Connect _with_ shared Customers, this
+                        is the only way to know the account associated with a Charge
 
     Returns:
         a pinax.stripe.models.Charge object
     """
     obj, _ = models.Charge.objects.get_or_create(stripe_id=data["id"])
     obj.customer = models.Customer.objects.filter(stripe_id=data["customer"]).first()
+    if getattr(obj.customer, 'stripe_account', None) is None and stripe_account is not None:
+        obj.stripe_account_hc = models.Account.objects.get(stripe_id=stripe_account)
     obj.source = data["source"]["id"]
     obj.currency = data["currency"]
     obj.invoice = models.Invoice.objects.filter(stripe_id=data["invoice"]).first()
