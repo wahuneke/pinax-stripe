@@ -101,7 +101,14 @@ class Webhook(with_metaclass(Registerable, object)):
                 cls=stripe.StripeObjectEncoder
             )
         )
-        self.event.valid = self.is_event_valid(self.event.webhook_message["data"], self.event.validated_message["data"])
+        # Before we can compare the new validated message to the original we need to ensure
+        # the ordering of keys will be identical
+        original = json.loads(json.dumps(
+                self.event.webhook_message,
+                sort_keys=True,
+                cls=stripe.StripeObjectEncoder
+        ))
+        self.event.valid = self.is_event_valid(original, self.event.validated_message)
         self.event.save()
 
     @staticmethod
@@ -109,8 +116,9 @@ class Webhook(with_metaclass(Registerable, object)):
         """
         Notice "data" may contain a "previous_attributes" section
         """
-        return "object" in webhook_message_data and "object" in validated_message_data and \
-               webhook_message_data["object"] == validated_message_data["object"]
+        return "data" in webhook_message_data and "data" in validated_message_data and \
+               "object" in webhook_message_data["data"] and "object" in validated_message_data["data"] and \
+               webhook_message_data["data"]["object"] == validated_message_data["data"]["object"]
 
     def send_signal(self):
         signal = registry.get_signal(self.name)
@@ -135,7 +143,8 @@ class Webhook(with_metaclass(Registerable, object)):
             if isinstance(e, stripe.StripeError):
                 data = e.http_body
             exceptions.log_exception(data=data, exception=e, event=self.event)
-            raise e
+            # Not 'raise e', that loses the traceback. Just 'raise'
+            raise
 
     def process_webhook(self):
         return

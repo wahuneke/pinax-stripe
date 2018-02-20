@@ -22,6 +22,9 @@ from .forms import PaymentMethodForm, PlanForm
 from .mixins import CustomerMixin, LoginRequiredMixin, PaymentsContextMixin
 from .models import Card, Event, Invoice, Subscription
 
+import logging
+
+logger = logging.getLogger(__name__)
 
 class InvoiceListView(LoginRequiredMixin, CustomerMixin, ListView):
     model = Invoice
@@ -197,16 +200,28 @@ class Webhook(View):
 
     def post(self, request, *args, **kwargs):
         body = smart_str(self.request.body)
-        data = json.loads(body)
-        event = Event.objects.filter(stripe_id=data["id"]).first()
+
+        # Construct a stripe Event object using the payload received. Provide None
+        # for api_key since the Event object does not need that information.
+        stripe_webhook_event = stripe.Event.construct_from(json.loads(body), None)
+
+        event = Event.objects.filter(stripe_id=stripe_webhook_event["id"]).first()
         if event:
             exceptions.log_exception(body, "Duplicate event record", event=event)
         else:
-            events.add_event(
-                stripe_id=data["id"],
-                kind=data["type"],
-                livemode=data["livemode"],
-                api_version=data["api_version"],
-                message=data
-            )
+            try:
+                events.add_event(
+                    stripe_id=stripe_webhook_event["id"],
+                    kind=stripe_webhook_event["type"],
+                    livemode=stripe_webhook_event["livemode"],
+                    api_version=stripe_webhook_event["api_version"],
+                    message=json.loads(str(stripe_webhook_event))
+                )
+            except Exception as e:
+                logger.error("Exception processing webhook. Event id = {} kind = {} api_version = {} message = {}: {}".
+                             format(stripe_webhook_event.get("id"), stripe_webhook_event.get("type"),
+                                    stripe_webhook_event.get("api_version"), str(stripe_webhook_event),
+                                    e.message))
+                raise
+
         return HttpResponse()

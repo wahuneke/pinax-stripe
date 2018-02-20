@@ -220,7 +220,7 @@ def sync_customer(customer, cu=None):
     customer.delinquent = cu["delinquent"]
     customer.default_source = cu["default_source"] or ""
     customer.save()
-    for source in cu["sources"]["data"]:
+    for source in cu["sources"].get("data", []):
         sources.sync_payment_source_from_stripe_data(customer, source)
-    for subscription in cu["subscriptions"]["data"]:
+    for subscription in cu["subscriptions"].get("data", []):
         subscriptions.sync_subscription_from_stripe_data(customer, subscription)
