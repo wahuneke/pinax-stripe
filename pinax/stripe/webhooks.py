@@ -596,3 +596,29 @@ class TransferUpdatedWebhook(TransferWebhook):
 class PingWebhook(Webhook):
     name = "ping"
     description = "May be sent by Stripe at any time to see if a provided webhook URL is working."
+
+
+class PayoutCanceled(Webhook):
+    name = "payout.canceled"
+    description = "Occurs whenever a payout is canceled."
+
+
+class PayoutCreated(Webhook):
+    name = "payout.created"
+    description = "Occurs whenever a payout is created."
+
+
+class PayoutFailed(Webhook):
+    name = "payout.failed"
+    description = "Occurs whenever a payout attempt fails."
+
+
+class PayoutPaid(Webhook):
+    name = "payout.paid"
+    description = "Occurs whenever a payout is expected to be available in the destination account. If the payout " \
+                  "fails, a payout.failed notification is additionally sent at a later time."
+
+
+class PayoutUpdated(Webhook):
+    name = "payout.updated"
+    description = "Occurs whenever the metadata of a payout is updated."
