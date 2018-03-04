@@ -393,6 +393,11 @@ class CustomerSourceUpdatedWebhook(CustomerSourceWebhook):
     description = "Occurs whenever a source's details are changed."
 
 
+class CustomerSourceExpiringWebhook(CustomerSourceWebhook):
+    name = "customer.source.expiring"
+    description = "Occurs whenever a source will expire at the end of the month."
+
+
 class CustomerSubscriptionWebhook(Webhook):
 
     def process_webhook(self):
