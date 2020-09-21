@@ -579,7 +579,7 @@ class Account(StripeObject):
 
     metadata = JSONField(null=True, blank=True)
 
-    stripe_publishable_key = models.CharField(null=True, blank=True, max_length=100)
+    stripe_publishable_key = models.CharField(null=True, blank=True, max_length=200)
 
     product_description = models.TextField(null=True, blank=True)
     statement_descriptor = models.TextField(null=True, blank=True)
